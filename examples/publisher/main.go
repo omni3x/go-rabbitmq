@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	rabbitmq "github.com/wagslane/go-rabbitmq"
+	rabbitmq "github.com/omni3x/go-rabbitmq"
 )
 
 func main() {
