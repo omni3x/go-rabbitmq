@@ -160,8 +160,8 @@ func (consumer Consumer) startGoroutines(
 		}
 	}
 
-	if consumeOptions.BindingExchange != nil {
-		exchange := consumeOptions.BindingExchange
+	if consumeOptions.ExchangeOptions != nil {
+		exchange := consumeOptions.ExchangeOptions
 		if exchange.Name == "" {
 			return fmt.Errorf("binding to exchange but name not specified")
 		}
@@ -179,6 +179,7 @@ func (consumer Consumer) startGoroutines(
 				return err
 			}
 		}
+
 		for _, routingKey := range routingKeys {
 			err := consumer.chManager.channel.QueueBind(
 				queue,

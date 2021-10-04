@@ -50,12 +50,17 @@ type Publisher struct {
 	disablePublishDueToBlocked    bool
 	disablePublishDueToBlockedMux *sync.RWMutex
 
-	options PublisherOptions
+	options      PublisherOptions
+	exchangeName string
+
+	logger Logger
 }
 
 // PublisherOptions are used to describe a publisher's configuration.
 // Logger is a custom logging interface.
 type PublisherOptions struct {
+	ExchangeOptions   *ExchangeOptions
+	Logging           bool
 	Logger            Logger
 	ReconnectInterval time.Duration
 }
@@ -66,6 +71,53 @@ func WithPublisherOptionsReconnectInterval(reconnectInterval time.Duration) func
 	return func(options *PublisherOptions) {
 		options.ReconnectInterval = reconnectInterval
 	}
+}
+
+// WithPublisherOptionsExchangeName returns a function that sets the exchange to publish to
+func WithPublisherOptionsExchangeName(name string) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).Name = name
+	}
+}
+
+// WithPublisherOptionsExchangeKind returns a function that sets the binding exchange kind/type
+func WithPublisherOptionsExchangeKind(kind string) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).Kind = kind
+	}
+}
+
+// WithPublisherOptionsExchangeDurable returns a function that sets the binding exchange durable flag
+func WithPublisherOptionsExchangeDurable(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Durable = true
+}
+
+// WithPublisherOptionsExchangeAutoDelete returns a function that sets the binding exchange autoDelete flag
+func WithPublisherOptionsExchangeAutoDelete(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).AutoDelete = true
+}
+
+// WithPublisherOptionsExchangeInternal returns a function that sets the binding exchange internal flag
+func WithPublisherOptionsExchangeInternal(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Internal = true
+}
+
+// WithPublisherOptionsExchangeNoWait returns a function that sets the binding exchange noWait flag
+func WithPublisherOptionsExchangeNoWait(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).NoWait = true
+}
+
+// WithPublisherOptionsExchangeArgs returns a function that sets the binding exchange arguments that are specific to the server's implementation of the exchange
+func WithPublisherOptionsExchangeArgs(args Table) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).ExchangeArgs = args
+	}
+}
+
+// WithPublisherOptionsExchangeDeclare returns a function that declares the binding exchange.
+// Use this setting if you want the consumer to create the exchange on start.
+func WithPublisherOptionsExchangeDeclare(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Declare = true
 }
 
 // WithPublisherOptionsLogging sets logging to true on the consumer options
@@ -96,6 +148,8 @@ func NewPublisher(url string, config Config, optionFuncs ...func(*PublisherOptio
 		optionFunc(options)
 	}
 
+	exchange := options.ExchangeOptions
+
 	chManager, err := newChannelManager(url, config, options.Logger, options.ReconnectInterval)
 	if err != nil {
 		return nil, err
@@ -107,9 +161,41 @@ func NewPublisher(url string, config Config, optionFuncs ...func(*PublisherOptio
 		disablePublishDueToFlowMux:    &sync.RWMutex{},
 		disablePublishDueToBlocked:    false,
 		disablePublishDueToBlockedMux: &sync.RWMutex{},
+		exchangeName:                  exchange.Name,
+		logger:                        options.Logger,
 		options:                       *options,
 		notifyReturnChan:              nil,
 		notifyPublishChan:             nil,
+	}
+
+	if publisher.exchangeName == "" {
+		publisher.logger.Infof("name not specified, publisher configured for default exchange")
+	}
+
+	if exchange.Declare {
+		err = publisher.chManager.channel.ExchangeDeclare(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	} else {
+		err = publisher.chManager.channel.ExchangeDeclarePassive(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	}
+
+	if err != nil {
+		return publisher, err
 	}
 
 	go publisher.startNotifyFlowHandler()
@@ -117,7 +203,7 @@ func NewPublisher(url string, config Config, optionFuncs ...func(*PublisherOptio
 
 	go publisher.handleRestarts()
 
-	return publisher, nil
+	return publisher, err
 }
 
 func (publisher *Publisher) handleRestarts() {
@@ -194,7 +280,7 @@ func (publisher *Publisher) Publish(
 
 		// Actual publish.
 		err := publisher.chManager.channel.Publish(
-			options.Exchange,
+			publisher.exchangeName,
 			routingKey,
 			options.Mandatory,
 			options.Immediate,
