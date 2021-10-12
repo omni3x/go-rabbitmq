@@ -7,20 +7,14 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// customLogger is used in WithPublisherOptionsLogger to create a custom logger.
-type customLogger struct{}
-
-// Printf is the only method needed in the Logger interface to function properly.
-func (c *customLogger) Printf(fmt string, args ...interface{}) {
-	log.Printf("mylogger: "+fmt, args...)
-}
-
 func main() {
-	mylogger := &customLogger{}
-
 	publisher, err := rabbitmq.NewPublisher(
-		"amqp://guest:guest@localhost", amqp.Config{},
-		rabbitmq.WithPublisherOptionsLogger(mylogger),
+		"amqp://guest:guest@localhost",
+		amqp.Config{},
+		rabbitmq.WithPublisherOptionsLogging,
+		rabbitmq.WithPublisherOptionsExchangeName("exchange"),
+		rabbitmq.WithPublisherOptionsExchangeKind("topic"),
+		rabbitmq.WithPublisherOptionsExchangeAutoDelete,
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -31,7 +25,6 @@ func main() {
 		rabbitmq.WithPublishOptionsContentType("application/json"),
 		rabbitmq.WithPublishOptionsMandatory,
 		rabbitmq.WithPublishOptionsPersistentDelivery,
-		rabbitmq.WithPublishOptionsExchange("events"),
 	)
 	if err != nil {
 		log.Fatal(err)

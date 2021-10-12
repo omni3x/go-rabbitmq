@@ -28,73 +28,6 @@ type Return struct {
 	amqp.Return
 }
 
-// PublishOptions are used to control how data is published
-type PublishOptions struct {
-	Exchange string
-	// Mandatory fails to publish if there are no queues
-	// bound to the routing key
-	Mandatory bool
-	// Immediate fails to publish if there are no consumers
-	// that can ack bound to the queue on the routing key
-	Immediate   bool
-	ContentType string
-	// Transient or Persistent
-	DeliveryMode uint8
-	// Expiration time in ms that a message will expire from a queue.
-	// See https://www.rabbitmq.com/ttl.html#per-message-ttl-in-publishers
-	Expiration string
-	Headers    Table
-}
-
-// WithPublishOptionsExchange returns a function that sets the exchange to publish to
-func WithPublishOptionsExchange(exchange string) func(*PublishOptions) {
-	return func(options *PublishOptions) {
-		options.Exchange = exchange
-	}
-}
-
-// WithPublishOptionsMandatory makes the publishing mandatory, which means when a queue is not
-// bound to the routing key a message will be sent back on the returns channel for you to handle
-func WithPublishOptionsMandatory(options *PublishOptions) {
-	options.Mandatory = true
-}
-
-// WithPublishOptionsImmediate makes the publishing immediate, which means when a consumer is not available
-// to immediately handle the new message, a message will be sent back on the returns channel for you to handle
-func WithPublishOptionsImmediate(options *PublishOptions) {
-	options.Immediate = true
-}
-
-// WithPublishOptionsContentType returns a function that sets the content type, i.e. "application/json"
-func WithPublishOptionsContentType(contentType string) func(*PublishOptions) {
-	return func(options *PublishOptions) {
-		options.ContentType = contentType
-	}
-}
-
-// WithPublishOptionsPersistentDelivery sets the message to persist. Transient messages will
-// not be restored to durable queues, persistent messages will be restored to
-// durable queues and lost on non-durable queues during server restart. By default publishings
-// are transient
-func WithPublishOptionsPersistentDelivery(options *PublishOptions) {
-	options.DeliveryMode = Persistent
-}
-
-// WithPublishOptionsExpiration returns a function that sets the expiry/TTL of a message. As per RabbitMq spec, it must be a
-// string value in milliseconds.
-func WithPublishOptionsExpiration(expiration string) func(options *PublishOptions) {
-	return func(options *PublishOptions) {
-		options.Expiration = expiration
-	}
-}
-
-// WithPublishOptionsHeaders returns a function that sets message header values, i.e. "msg-id"
-func WithPublishOptionsHeaders(headers Table) func(*PublishOptions) {
-	return func(options *PublishOptions) {
-		options.Headers = headers
-	}
-}
-
 // Publisher allows you to publish messages safely across an open connection
 type Publisher struct {
 	chManager *channelManager
@@ -104,14 +37,64 @@ type Publisher struct {
 	disablePublishDueToFlow    bool
 	disablePublishDueToFlowMux *sync.RWMutex
 
+	exchangeName string
+
 	logger Logger
 }
 
 // PublisherOptions are used to describe a publisher's configuration.
 // Logging set to true will enable the consumer to print to stdout
 type PublisherOptions struct {
-	Logging bool
-	Logger  Logger
+	ExchangeOptions *ExchangeOptions
+	Logging         bool
+	Logger          Logger
+}
+
+// WithPublisherOptionsExchangeName returns a function that sets the exchange to publish to
+func WithPublisherOptionsExchangeName(name string) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).Name = name
+	}
+}
+
+// WithPublisherOptionsExchangeKind returns a function that sets the binding exchange kind/type
+func WithPublisherOptionsExchangeKind(kind string) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).Kind = kind
+	}
+}
+
+// WithPublisherOptionsExchangeDurable returns a function that sets the binding exchange durable flag
+func WithPublisherOptionsExchangeDurable(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Durable = true
+}
+
+// WithPublisherOptionsExchangeAutoDelete returns a function that sets the binding exchange autoDelete flag
+func WithPublisherOptionsExchangeAutoDelete(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).AutoDelete = true
+}
+
+// WithPublisherOptionsExchangeInternal returns a function that sets the binding exchange internal flag
+func WithPublisherOptionsExchangeInternal(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Internal = true
+}
+
+// WithPublisherOptionsExchangeNoWait returns a function that sets the binding exchange noWait flag
+func WithPublisherOptionsExchangeNoWait(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).NoWait = true
+}
+
+// WithPublisherOptionsExchangeArgs returns a function that sets the binding exchange arguments that are specific to the server's implementation of the exchange
+func WithPublisherOptionsExchangeArgs(args Table) func(*PublisherOptions) {
+	return func(options *PublisherOptions) {
+		getPublisherExchangeOptionsOrSetDefault(options).ExchangeArgs = args
+	}
+}
+
+// WithPublisherOptionsExchangeDeclare returns a function that declares the binding exchange.
+// Use this setting if you want the consumer to create the exchange on start.
+func WithPublisherOptionsExchangeDeclare(options *PublisherOptions) {
+	getPublisherExchangeOptionsOrSetDefault(options).Declare = true
 }
 
 // WithPublisherOptionsLogging sets logging to true on the consumer options
@@ -143,6 +126,8 @@ func NewPublisher(url string, config amqp.Config, optionFuncs ...func(*Publisher
 		options.Logger = &noLogger{} // default no logging
 	}
 
+	exchange := options.ExchangeOptions
+
 	chManager, err := newChannelManager(url, config, options.Logger)
 	if err != nil {
 		return Publisher{}, err
@@ -152,8 +137,39 @@ func NewPublisher(url string, config amqp.Config, optionFuncs ...func(*Publisher
 		chManager:                  chManager,
 		disablePublishDueToFlow:    false,
 		disablePublishDueToFlowMux: &sync.RWMutex{},
+		exchangeName:               exchange.Name,
 		logger:                     options.Logger,
 		notifyReturnChan:           nil,
+	}
+
+	if publisher.exchangeName == "" {
+		publisher.logger.Printf("name not specified, publisher configured for default exchange")
+	}
+
+	if exchange.Declare {
+		err = publisher.chManager.channel.ExchangeDeclare(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	} else {
+		err = publisher.chManager.channel.ExchangeDeclarePassive(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	}
+
+	if err != nil {
+		return publisher, err
 	}
 
 	go publisher.startNotifyFlowHandler()
@@ -169,7 +185,7 @@ func NewPublisher(url string, config amqp.Config, optionFuncs ...func(*Publisher
 		}
 	}()
 
-	return publisher, nil
+	return publisher, err
 }
 
 // NotifyReturn registers a listener for basic.return methods.
@@ -210,7 +226,7 @@ func (publisher *Publisher) Publish(
 
 		// Actual publish.
 		err := publisher.chManager.channel.Publish(
-			options.Exchange,
+			publisher.exchangeName,
 			routingKey,
 			options.Mandatory,
 			options.Immediate,

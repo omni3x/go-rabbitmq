@@ -199,13 +199,13 @@ func (consumer Consumer) startGoroutines(
 		return err
 	}
 
-	if consumeOptions.BindingExchange != nil {
-		exchange := consumeOptions.BindingExchange
+	if consumeOptions.ExchangeOptions != nil {
+		exchange := consumeOptions.ExchangeOptions
 		if exchange.Name == "" {
 			return fmt.Errorf("binding to exchange but name not specified")
 		}
 		if exchange.Declare {
-			err = consumer.chManager.channel.ExchangeDeclare(
+			if err = consumer.chManager.channel.ExchangeDeclare(
 				exchange.Name,
 				exchange.Kind,
 				exchange.Durable,
@@ -213,11 +213,11 @@ func (consumer Consumer) startGoroutines(
 				exchange.Internal,
 				exchange.NoWait,
 				tableToAMQPTable(exchange.ExchangeArgs),
-			)
-			if err != nil {
+			); err != nil {
 				return err
 			}
 		}
+
 		for _, routingKey := range routingKeys {
 			err = consumer.chManager.channel.QueueBind(
 				queue,
