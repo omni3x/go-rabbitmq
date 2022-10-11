@@ -4,17 +4,6 @@ import (
 	"time"
 )
 
-func getDefaultPublishOptions() PublishOptions {
-	return PublishOptions{
-		Mandatory:    false,
-		Immediate:    false,
-		ContentType:  "",
-		DeliveryMode: Transient,
-		Expiration:   "",
-		Headers:      nil,
-	}
-}
-
 // PublishOptions are used to control how data is published
 type PublishOptions struct {
 	Exchange string
