@@ -198,6 +198,36 @@ func NewPublisher(url string, config Config, optionFuncs ...func(*PublisherOptio
 		return publisher, err
 	}
 
+	if publisher.exchangeName == "" {
+		publisher.logger.Infof("name not specified, publisher configured for default exchange")
+	}
+
+	if exchange.Declare {
+		err = publisher.chManager.channel.ExchangeDeclare(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	} else {
+		err = publisher.chManager.channel.ExchangeDeclarePassive(
+			exchange.Name,
+			exchange.Kind,
+			exchange.Durable,
+			exchange.AutoDelete,
+			exchange.Internal,
+			exchange.NoWait,
+			tableToAMQPTable(exchange.ExchangeArgs),
+		)
+	}
+
+	if err != nil {
+		return publisher, err
+	}
+
 	go publisher.startNotifyFlowHandler()
 	go publisher.startNotifyBlockedHandler()
 
