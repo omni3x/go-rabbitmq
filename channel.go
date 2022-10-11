@@ -13,12 +13,14 @@ type channelManager struct {
 	url                 string
 	channel             *amqp.Channel
 	connection          *amqp.Connection
-	config              amqp.Config
+	amqpConfig          Config
 	channelMux          *sync.RWMutex
 	notifyCancelOrClose chan error
+	reconnectInterval   time.Duration
+	reconnectionCount   uint
 }
 
-func newChannelManager(url string, conf amqp.Config, log Logger) (*channelManager, error) {
+func newChannelManager(url string, conf Config, log Logger, reconnectInterval time.Duration) (*channelManager, error) {
 	conn, ch, err := getNewChannel(url, conf)
 	if err != nil {
 		return nil, err
@@ -30,15 +32,16 @@ func newChannelManager(url string, conf amqp.Config, log Logger) (*channelManage
 		connection:          conn,
 		channel:             ch,
 		channelMux:          &sync.RWMutex{},
-		config:              conf,
+		amqpConfig:          conf,
 		notifyCancelOrClose: make(chan error),
+		reconnectInterval:   reconnectInterval,
 	}
 	go chManager.startNotifyCancelOrClosed()
 	return &chManager, nil
 }
 
-func getNewChannel(url string, conf amqp.Config) (*amqp.Connection, *amqp.Channel, error) {
-	amqpConn, err := amqp.DialConfig(url, conf)
+func getNewChannel(url string, conf Config) (*amqp.Connection, *amqp.Channel, error) {
+	amqpConn, err := amqp.DialConfig(url, amqp.Config(conf))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -46,46 +49,46 @@ func getNewChannel(url string, conf amqp.Config) (*amqp.Connection, *amqp.Channe
 	if err != nil {
 		return nil, nil, err
 	}
-	return amqpConn, ch, err
+	return amqpConn, ch, nil
 }
 
 // startNotifyCancelOrClosed listens on the channel's cancelled and closed
-// notifiers. When it detects a problem, it attempts to reconnect with an exponential
-// backoff. Once reconnected, it sends an error back on the manager's notifyCancelOrClose
+// notifiers. When it detects a problem, it attempts to reconnect.
+// Once reconnected, it sends an error back on the manager's notifyCancelOrClose
 // channel
 func (chManager *channelManager) startNotifyCancelOrClosed() {
 	notifyCloseChan := chManager.channel.NotifyClose(make(chan *amqp.Error, 1))
 	notifyCancelChan := chManager.channel.NotifyCancel(make(chan string, 1))
-
 	select {
 	case err := <-notifyCloseChan:
-		// If the connection close is triggered by the Server, a reconnection takes place
-		if err != nil && err.Server {
-			chManager.logger.Printf("attempting to reconnect to amqp server after close")
-			chManager.reconnectWithBackoff()
-			chManager.logger.Printf("successfully reconnected to amqp server after close")
+		if err != nil {
+			chManager.logger.Errorf("attempting to reconnect to amqp server after close with error: %v", err)
+			chManager.reconnectLoop()
+			chManager.logger.Warnf("successfully reconnected to amqp server")
 			chManager.notifyCancelOrClose <- err
 		}
+		if err == nil {
+			chManager.logger.Infof("amqp channel closed gracefully")
+		}
 	case err := <-notifyCancelChan:
-		chManager.logger.Printf("attempting to reconnect to amqp server after cancel")
-		chManager.reconnectWithBackoff()
-		chManager.logger.Printf("successfully reconnected to amqp server after cancel")
+		chManager.logger.Errorf("attempting to reconnect to amqp server after cancel with error: %s", err)
+		chManager.reconnectLoop()
+		chManager.logger.Warnf("successfully reconnected to amqp server after cancel")
 		chManager.notifyCancelOrClose <- errors.New(err)
 	}
 }
 
-// reconnectWithBackoff continuously attempts to reconnect with an
-// exponential backoff strategy
-func (chManager *channelManager) reconnectWithBackoff() {
-	backoffTime := time.Second
+// reconnectLoop continuously attempts to reconnect
+func (chManager *channelManager) reconnectLoop() {
 	for {
-		chManager.logger.Printf("waiting %s seconds to attempt to reconnect to amqp server", backoffTime)
-		time.Sleep(backoffTime)
-		backoffTime *= 2
+		chManager.logger.Infof("waiting %s seconds to attempt to reconnect to amqp server", chManager.reconnectInterval)
+		time.Sleep(chManager.reconnectInterval)
 		err := chManager.reconnect()
 		if err != nil {
-			chManager.logger.Printf("error reconnecting to amqp server: %v", err)
+			chManager.logger.Errorf("error reconnecting to amqp server: %v", err)
 		} else {
+			chManager.reconnectionCount++
+			go chManager.startNotifyCancelOrClosed()
 			return
 		}
 	}
@@ -95,7 +98,7 @@ func (chManager *channelManager) reconnectWithBackoff() {
 func (chManager *channelManager) reconnect() error {
 	chManager.channelMux.Lock()
 	defer chManager.channelMux.Unlock()
-	newConn, newChannel, err := getNewChannel(chManager.url, chManager.config)
+	newConn, newChannel, err := getNewChannel(chManager.url, chManager.amqpConfig)
 	if err != nil {
 		return err
 	}
@@ -105,6 +108,22 @@ func (chManager *channelManager) reconnect() error {
 
 	chManager.connection = newConn
 	chManager.channel = newChannel
-	go chManager.startNotifyCancelOrClosed()
+	return nil
+}
+
+// close safely closes the current channel and connection
+func (chManager *channelManager) close() error {
+	chManager.channelMux.Lock()
+	defer chManager.channelMux.Unlock()
+
+	err := chManager.channel.Close()
+	if err != nil {
+		return err
+	}
+
+	err = chManager.connection.Close()
+	if err != nil {
+		return err
+	}
 	return nil
 }

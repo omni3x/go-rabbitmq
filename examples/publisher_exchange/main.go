@@ -4,13 +4,12 @@ import (
 	"log"
 
 	rabbitmq "github.com/omni3x/go-rabbitmq"
-	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
 	publisher, err := rabbitmq.NewPublisher(
 		"amqp://guest:guest@localhost",
-		amqp.Config{},
+		rabbitmq.Config{},
 		rabbitmq.WithPublisherOptionsLogging,
 		rabbitmq.WithPublisherOptionsExchangeName("exchange"),
 		rabbitmq.WithPublisherOptionsExchangeKind("topic"),

@@ -1,4 +1,5 @@
 // Copyright (c) 2021 VMware, Inc. or its affiliates. All Rights Reserved.
+// Copyright (c) 2012-2021, Sean Treadway, SoundCloud Ltd.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -1173,7 +1174,7 @@ func (msg *queueDeclare) id() (uint16, uint16) {
 }
 
 func (msg *queueDeclare) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *queueDeclare) write(w io.Writer) (err error) {

@@ -7,6 +7,7 @@ func getDefaultConsumeOptions() ConsumeOptions {
 		QueueAutoDelete:   false,
 		QueueExclusive:    false,
 		QueueNoWait:       false,
+		QueueDeclare:      true,
 		QueueArgs:         nil,
 		BindingNoWait:     false,
 		BindingArgs:       nil,
@@ -29,6 +30,7 @@ type ConsumeOptions struct {
 	QueueAutoDelete   bool
 	QueueExclusive    bool
 	QueueNoWait       bool
+	QueueDeclare      bool
 	QueueArgs         Table
 	BindingNoWait     bool
 	BindingArgs       Table
@@ -71,6 +73,13 @@ func WithConsumeOptionsQueueExclusive(options *ConsumeOptions) {
 // or attempting to modify an existing queue from a different connection.
 func WithConsumeOptionsQueueNoWait(options *ConsumeOptions) {
 	options.QueueNoWait = true
+}
+
+// WithConsumeOptionsQueueNoDeclare sets the queue to no declare, which means
+// the queue will be assumed to be declared on the server, and won't be
+// declared at all.
+func WithConsumeOptionsQueueNoDeclare(options *ConsumeOptions) {
+	options.QueueDeclare = false
 }
 
 // WithConsumeOptionsQuorum sets the queue a quorum type, which means multiple nodes
